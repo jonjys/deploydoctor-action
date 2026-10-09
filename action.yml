@@ -1,5 +1,5 @@
 name: DeployDoctor
-description: Scan a pull request for the mistakes that break a Vercel deploy, before Vercel builds it. Static analysis through the GitHub API; nothing is cloned or executed.
+description: "Catch Vercel deploy failures in pull requests: imports, env vars, Edge runtime, Prisma. Free for public repos."
 author: Nytto Labs
 branding:
   icon: activity
