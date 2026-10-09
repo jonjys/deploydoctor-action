@@ -1,0 +1,62 @@
+name: DeployDoctor
+description: Scan a pull request for the mistakes that break a Vercel deploy, before Vercel builds it. Static analysis through the GitHub API; nothing is cloned or executed.
+author: Nytto Labs
+branding:
+  icon: activity
+  color: green
+inputs:
+  token:
+    description: "Optional. DeployDoctor API token from My scans while a pass is active, for private repositories and unlimited scans. Leave it out on a public repository to scan for free (3 scans a day per repository); the workflow then needs the id-token write permission."
+    required: false
+    default: ""
+  repository:
+    description: GitHub repository to scan, as owner/name. Defaults to the repository the workflow runs in.
+    required: false
+    default: ${{ github.repository }}
+  ref:
+    description: Branch, tag or commit to scan. Defaults to the pull request head, or the pushed commit.
+    required: false
+    default: ${{ github.event.pull_request.head.sha || github.sha }}
+  github-token:
+    description: Only for private repositories. A token with read access to the repository contents, usually the workflow's own github.token. It is forwarded to DeployDoctor for this scan and never stored.
+    required: false
+    default: ""
+  fail-on:
+    description: Which result fails the job. `red` (default) fails on definite problems, `yellow` also fails on items that need review, `never` only reports.
+    required: false
+    default: red
+  checks:
+    description: Comma-separated categories to scan. Any of next, vercel, env, supabase, prisma. Leave empty to let the detected stack decide.
+    required: false
+    default: ""
+  api-url:
+    description: DeployDoctor base URL. Only change this for a self-hosted instance.
+    required: false
+    default: https://deploydoctor.nyttolabs.com
+outputs:
+  overall:
+    description: red, yellow or green.
+    value: ${{ steps.scan.outputs.overall }}
+  report-url:
+    description: Link to the saved report.
+    value: ${{ steps.scan.outputs.report-url }}
+  red:
+    description: Number of failed checks.
+    value: ${{ steps.scan.outputs.red }}
+  yellow:
+    description: Number of checks that need review.
+    value: ${{ steps.scan.outputs.yellow }}
+runs:
+  using: composite
+  steps:
+    - id: scan
+      shell: bash
+      env:
+        DD_TOKEN: ${{ inputs.token }}
+        DD_REPOSITORY: ${{ inputs.repository }}
+        DD_REF: ${{ inputs.ref }}
+        DD_GITHUB_TOKEN: ${{ inputs.github-token }}
+        DD_FAIL_ON: ${{ inputs.fail-on }}
+        DD_CHECKS: ${{ inputs.checks }}
+        DD_API_URL: ${{ inputs.api-url }}
+      run: node "${{ github.action_path }}/scan.mjs"
