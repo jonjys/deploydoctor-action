@@ -1,0 +1,40 @@
+name: Test and update v1
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: action-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - run: node --check scan.mjs
+      - run: node --test scan.test.mjs
+
+  release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Update the major-version tag after tests pass
+        shell: bash
+        run: |
+          set -euo pipefail
+          previous=$(git rev-parse refs/tags/v1)
+          git push --force-with-lease="refs/tags/v1:${previous}" origin "${GITHUB_SHA}:refs/tags/v1"
