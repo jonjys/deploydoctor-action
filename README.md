@@ -13,7 +13,7 @@ It checks the things that pass locally and fail on Vercel:
 
 Each finding is annotated on the file and line in the pull request, with the fix, and the job summary links the full report.
 
-**Free on public repositories**: no account, no token, 3 scans a day per repository.
+**Free on public repositories**: no account, no token, 1 scan a day per repository.
 
 ```yaml
 name: DeployDoctor
