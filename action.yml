@@ -6,7 +6,7 @@ branding:
   color: green
 inputs:
   token:
-    description: "Optional. DeployDoctor API token from My scans while a pass is active, for private repositories and unlimited scans. Leave it out on a public repository to scan for free (3 scans a day per repository); the workflow then needs the id-token write permission."
+    description: "Optional. DeployDoctor API token from My scans while a pass is active, for private repositories and unlimited scans. Leave it out on a public repository to scan for free (1 scan a day per repository); the workflow then needs the id-token write permission."
     required: false
     default: ""
   repository:

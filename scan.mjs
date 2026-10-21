@@ -78,9 +78,10 @@ try {
   fail(`DeployDoctor did not answer: ${error instanceof Error ? error.message : String(error)}`);
 }
 
-if (free && response.status === 429) {
+if (free && response.status === 429 && data?.paywall === true) {
   // The free daily quota for this repository is used up: report it, never block the pull request.
-  warn(`DeployDoctor: today's free scans for ${repository} are used (${data?.error ?? "daily limit"}). Unlimited scans: ${apiUrl}/pricing`);
+  // Any other 429, such as a GitHub API rate limit, is a failed scan and is reported as one below.
+  warn(`DeployDoctor: today's free scan for ${repository} is used (${data?.error ?? "daily limit"}). Unlimited scans: ${apiUrl}/pricing`);
 }
 if (!response.ok) {
   const hint = response.status === 402 ? ` A pass is needed: ${apiUrl}/pricing` : response.status === 401 ? " Create a new token under My scans." : "";
