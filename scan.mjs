@@ -110,9 +110,10 @@ ${rows.join("\n")}
 
 for (const check of data.checks) {
   if (check.status === "green") continue;
-  const level = check.status === "red" ? "error" : "warning";
   const findings = check.findings?.length ? check.findings : [{ file: "", line: 0, problem: check.explanation }];
   for (const finding of findings.slice(0, 10)) {
+    const status = finding.status === "red" || finding.status === "yellow" ? finding.status : check.status;
+    const level = status === "red" ? "error" : "warning";
     const location = finding.file ? `file=${finding.file},line=${finding.line || 1},` : "";
     console.log(`::${level} ${location}title=${check.title}::${(finding.problem || check.explanation).replace(/\r?\n/g, " ")} Fix: ${(finding.fix || check.fix).replace(/\r?\n/g, " ")}`);
   }

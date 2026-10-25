@@ -63,3 +63,8 @@ test("successful scans still report results and red findings fail the job", () =
     assert.match(result.stdout, /https:\/\/deploydoctor.example\/r\/fixture/);
   }
 });
+
+test("mixed production findings keep review annotations as warnings", () => {
+  const result = run(201, {overall:"red",summary:{red:1,yellow:0,green:0},url:"https://deploydoctor.example/r/report",checks:[{id:"production-safety",title:"Production safety",status:"red",explanation:"Source risks",fix:"Review",findings:[{file:"app/a.ts",line:1,status:"red",problem:"Invalid runtime",fix:"Use nodejs"},{file:"app/b.ts",line:2,status:"yellow",problem:"Review payment redirect",fix:"Confirm production URL"}]}]});
+  assert.equal(result.status,1);assert.match(result.stdout,/::error file=app\/a.ts,line=1,/);assert.match(result.stdout,/::warning file=app\/b.ts,line=2,/);assert.doesNotMatch(result.stdout,/::error file=app\/b.ts/);
+});
