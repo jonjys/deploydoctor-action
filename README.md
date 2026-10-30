@@ -44,6 +44,12 @@ Private repository or unlimited scans: create an API token under My scans while 
 
 Outputs: `overall` (red, yellow, green), `report-url`, `red`, `yellow`. Findings are annotated on the changed files and listed in the job summary with a link to the full report.
 
+## Free webhook replay lab
+
+One payment can arrive at your webhook more than once. [Try the free replay lab](https://deploydoctor.nyttolabs.com/webhook-replay-lab?utm_source=github-action&utm_medium=readme&utm_campaign=break-my-checkout) to compare duplicate deliveries, worker restarts and crash recovery before reviewing your own handler.
+
+The lab runs in your browser with sample events; it sends no live payments and does not validate your checkout. Then [scan your repository](https://deploydoctor.nyttolabs.com/?utm_source=github-action&utm_medium=readme#scan-repository) for source-backed deployment and payment-risk findings. The existing [$2 one-time 24-hour pass](https://deploydoctor.nyttolabs.com/pricing) includes private repos, subject to capacity and GitHub limits.
+
 Full documentation: https://deploydoctor.nyttolabs.com/ci
 
 Source of the scanner: https://github.com/jonjys/deploydoctor. Questions: support@nyttolabs.com
