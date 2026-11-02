@@ -19,8 +19,8 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - run: node --check scan.mjs
-      - run: node --test scan.test.mjs
+      - run: node --check scan.mjs && node --check pr-comment.mjs
+      - run: node --test *.test.mjs
 
   release:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'

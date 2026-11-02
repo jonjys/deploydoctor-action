@@ -29,6 +29,18 @@ inputs:
     description: Comma-separated categories to scan. Any of next, vercel, env, supabase, prisma. Leave empty to let the detected stack decide.
     required: false
     default: ""
+  comment:
+    description: Update one PR conversation comment. Requires pull-requests write permission. Does not comment on forks, Dependabot or non-PR events. Failure to comment never changes the scan result.
+    required: false
+    default: "true"
+  comment-token:
+    description: GitHub workflow token for the PR comment only. Never forwarded to DeployDoctor. Normally leave this at github.token.
+    required: false
+    default: ${{ github.token }}
+  audit-link:
+    description: Include a discreet link to the existing optional human audit in the PR comment.
+    required: false
+    default: "true"
   api-url:
     description: DeployDoctor base URL. Only change this for a self-hosted instance.
     required: false
@@ -46,6 +58,12 @@ outputs:
   yellow:
     description: Number of checks that need review.
     value: ${{ steps.scan.outputs.yellow }}
+  comment-status:
+    description: created, updated, skipped, stale or failed.
+    value: ${{ steps.scan.outputs.comment-status }}
+  comment-url:
+    description: Link to the PR conversation comment when available.
+    value: ${{ steps.scan.outputs.comment-url }}
 runs:
   using: composite
   steps:
@@ -58,5 +76,8 @@ runs:
         DD_GITHUB_TOKEN: ${{ inputs.github-token }}
         DD_FAIL_ON: ${{ inputs.fail-on }}
         DD_CHECKS: ${{ inputs.checks }}
+        DD_COMMENT: ${{ inputs.comment }}
+        DD_COMMENT_TOKEN: ${{ inputs.comment-token }}
+        DD_AUDIT_LINK: ${{ inputs.audit-link }}
         DD_API_URL: ${{ inputs.api-url }}
       run: node "${{ github.action_path }}/scan.mjs"
