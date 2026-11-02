@@ -2,6 +2,7 @@
 // or without one with a GitHub OIDC token (free on public repositories), writes the result to the job
 // summary, exposes outputs and fails the job according to `fail-on`.
 import { appendFileSync, readFileSync } from "node:fs";
+import { pullRequestContext, upsertComment, text as markdownText } from "./pr-comment.mjs";
 
 const env = (name, fallback = "") => (process.env[name] ?? fallback).trim();
 const token = env("DD_TOKEN");
@@ -12,8 +13,10 @@ const failOn = env("DD_FAIL_ON", "red").toLowerCase();
 const checks = env("DD_CHECKS").split(",").map((item) => item.trim()).filter(Boolean);
 const apiUrl = env("DD_API_URL", "https://deploydoctor.nyttolabs.com").replace(/\/+$/, "");
 
-const fail = (message) => { console.log(`::error::${message}`); process.exit(1); };
-const warn = (message) => { console.log(`::warning::${message}`); process.exit(0); };
+const commandText = value => String(value).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A");
+const commandProperty = value => commandText(value).replace(/:/g,"%3A").replace(/,/g,"%2C");
+const fail = (message) => { console.log(`::error::${commandText(message)}`); process.exit(1); };
+const warn = (message) => { console.log(`::warning::${commandText(message)}`); process.exit(0); };
 const output = (name, value) => { if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`); };
 const summary = (markdown) => { if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${markdown}\n`); };
 
@@ -61,6 +64,23 @@ if (ref) body.ref = ref;
 if (githubToken) body.privateToken = githubToken;
 if (checks.length) body.checks = checks;
 
+async function comment(outcome) {
+  if (env("DD_COMMENT", "true") !== "true") return;
+  const context = pullRequestContext();
+  if (!context || context.repository !== repository || ref.toLowerCase() !== context.sha) { output("comment-status", "skipped"); return; }
+  const commentToken = env("DD_COMMENT_TOKEN");
+  if (!commentToken) { output("comment-status", "skipped"); return; }
+  try {
+    const result = await upsertComment({context, outcome, token:commentToken, audit:env("DD_AUDIT_LINK", "true") === "true"});
+    output("comment-status", result.status);
+    if (result.url) output("comment-url", result.url);
+    if (result.status === "stale") summary("PR comment kept: the pull request head changed or the PR was closed. This scan is not the current PR result.");
+  } catch {
+    output("comment-status", "failed");
+    console.log("::warning::DeployDoctor could not update the PR comment. Check pull-requests: write permission and comment-token. Scan results remain in the job summary.");
+  }
+}
+
 const free = !token;
 const auth = free ? { "x-github-oidc-token": await githubOidcToken() } : { authorization: `Bearer ${token}` };
 
@@ -75,15 +95,19 @@ try {
   });
   data = await response.json();
 } catch (error) {
+  await comment({kind:"unavailable"});
   fail(`DeployDoctor did not answer: ${error instanceof Error ? error.message : String(error)}`);
 }
 
 if (free && response.status === 429 && data?.paywall === true) {
   // The free daily quota for this repository is used up: report it, never block the pull request.
   // Any other 429, such as a GitHub API rate limit, is a failed scan and is reported as one below.
+  summary(`## DeployDoctor: not scanned\n\nToday's free scan for ${repository} is used. No new result was produced for this commit. [Pass details](${apiUrl}/pricing).`);
+  await comment({kind:"quota"});
   warn(`DeployDoctor: today's free scan for ${repository} is used (${data?.error ?? "daily limit"}). Unlimited scans: ${apiUrl}/pricing`);
 }
 if (!response.ok) {
+  await comment({kind:"unavailable"});
   const hint = response.status === 402 ? ` A pass is needed: ${apiUrl}/pricing` : response.status === 401 ? " Create a new token under My scans." : "";
   fail(`DeployDoctor returned ${response.status}: ${data?.error ?? "unknown error"}.${hint}`);
 }
@@ -96,8 +120,8 @@ output("red", String(data.summary.red));
 output("yellow", String(data.summary.yellow));
 
 const rows = data.checks.map((check) => {
-  const where = (check.findings ?? []).slice(0, 3).map((finding) => `\`${finding.file}:${finding.line}\``).join(", ");
-  return `| ${icon[check.status]} ${label[check.status]} | ${check.title} | ${where || (check.status === "green" ? "" : check.explanation)} |`;
+  const where = (check.findings ?? []).slice(0, 3).map((finding) => `\`${markdownText(finding.file)}:${finding.line}\``).join(", ");
+  return `| ${icon[check.status]} ${label[check.status]} | ${markdownText(check.title)} | ${where || (check.status === "green" ? "" : markdownText(check.explanation))} |`;
 });
 summary(`## DeployDoctor: ${icon[data.overall]} ${label[data.overall]} on \`${repository}@${(data.ref ?? ref).slice(0, 12)}\`
 
@@ -114,10 +138,12 @@ for (const check of data.checks) {
   for (const finding of findings.slice(0, 10)) {
     const status = finding.status === "red" || finding.status === "yellow" ? finding.status : check.status;
     const level = status === "red" ? "error" : "warning";
-    const location = finding.file ? `file=${finding.file},line=${finding.line || 1},` : "";
-    console.log(`::${level} ${location}title=${check.title}::${(finding.problem || check.explanation).replace(/\r?\n/g, " ")} Fix: ${(finding.fix || check.fix).replace(/\r?\n/g, " ")}`);
+    const location = finding.file ? `file=${commandProperty(finding.file)},line=${finding.line || 1},` : "";
+    console.log(`::${level} ${location}title=${commandProperty(check.title)}::${commandText(finding.problem || check.explanation)} Fix: ${commandText(finding.fix || check.fix)}`);
   }
 }
+
+await comment({kind:"report",data,apiUrl});
 
 console.log(`DeployDoctor: ${label[data.overall]} (${data.summary.red} failed, ${data.summary.yellow} to review). ${data.url}`);
 const failed = (failOn === "red" && data.summary.red > 0) || (failOn === "yellow" && (data.summary.red > 0 || data.summary.yellow > 0));
