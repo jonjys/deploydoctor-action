@@ -55,7 +55,7 @@ function runScan({status=201,data=report.data,comments=[],permissionDenied=false
  }finally{rmSync(dir,{recursive:true,force:true});}
 }
 test('red scans publish the comment before failing; comment token never reaches the scanner',()=>{
- const result=runScan();assert.equal(result.status,1,result.stderr);assert.match(result.output,/comment-status=created/);const scan=result.calls.find(c=>c.url.endsWith('/api/reports'));assert.doesNotMatch(JSON.stringify(scan),/comment-only/);assert.ok(result.calls.some(c=>c.method==='POST'&&c.url.includes('/issues/7/comments')));
+ const result=runScan();assert.equal(result.status,1,result.stderr);assert.match(result.output,/comment-status=created/);const scan=result.calls.find(c=>c.url.endsWith('/api/reports'));assert.equal(JSON.parse(scan.body).pullRequest,7);assert.equal(JSON.parse(scan.body).ref,sha);assert.doesNotMatch(JSON.stringify(scan),/comment-only/);assert.ok(result.calls.some(c=>c.method==='POST'&&c.url.includes('/issues/7/comments')));
 });
 test('quota exhaustion updates the comment without failing or presenting a stale green result',()=>{
  const result=runScan({status:429,data:{paywall:true,error:'One free scan used'},comments:[comment]});assert.equal(result.status,0,result.stderr);assert.match(result.summary,/not scanned/);assert.match(result.output,/comment-status=updated/);const written=JSON.parse(result.calls.find(c=>c.method==='PATCH').body).body;assert.match(written,/Not scanned/);assert.doesNotMatch(written,/Checks passed|Open full report/);
@@ -66,4 +66,16 @@ test('missing permissions cannot change scan success; opt-out, ref overrides and
 });
 test('annotation text cannot inject workflow commands through source-controlled fields',()=>{
  const data=structuredClone(report.data);data.checks=[{status:'red',title:'Imports\n::notice::fake',explanation:'',fix:'Check',findings:[{file:'a.ts,evil=x\n::notice::fake',line:1,problem:'bad\n::notice::fake',fix:'fix'}]}];const result=runScan({data,disabled:true});assert.equal(result.status,1);assert.doesNotMatch(result.stdout,/\n::notice::fake/);assert.match(result.stdout,/%0A/);assert.match(result.stdout,/%2C/);
+});
+
+test('PR change review distinguishes new findings from existing ones and preserves full-head gating',()=>{
+ const impact={version:1,number:7,headCommitSha:sha,baseCommitSha:'b'.repeat(40),partial:false,introduced:[{file:'app/page.tsx',line:8,problem:'New casing break',fix:'Use Button.tsx',status:'red'}],persisting:[{file:'old.ts',line:1,problem:'Old env risk'}],noLongerDetected:[{}],uncertain:[],notCompared:[]};
+ const withImpact={...report,data:{...report.data,pullRequest:impact}};
+ const body=renderComment(context,withImpact,false);assert.match(body,/1 newly detected/);assert.match(body,/1 already present/);assert.match(body,/1 no longer detected/);assert.match(body,/New casing break/);assert.doesNotMatch(body,/Old env risk/);assert.match(body,/not a verified fix/);assert.match(body,/b{12}/);assert.match(body,/blob\/a{40}\/app\/page.tsx#L8/);
+ const noNew=renderComment(context,{...withImpact,data:{...withImpact.data,pullRequest:{...impact,introduced:[]}}},false);assert.match(noNew,/No newly detected findings/);assert.match(noNew,/does not establish/);assert.match(noNew,/1 red checks/);
+ for(const bad of [{...impact,number:8},{...impact,headCommitSha:'c'.repeat(40)},{...impact,baseCommitSha:'main'},{...impact,introduced:null}])assert.throws(()=>renderComment(context,{...report,data:{...report.data,pullRequest:bad}}));
+ const partial=renderComment(context,{...report,data:{...report.data,partial:true,pullRequest:{...impact,partial:true,introduced:[],uncertain:[{}]}}});assert.match(partial,/Incomplete comparison/);assert.match(partial,/not a new\/fixed verdict/);
+ const escaped=renderComment(context,{...report,data:{...report.data,pullRequest:{...impact,introduced:[{file:'@attacker.ts',line:1,status:'red',problem:'<script> @everyone [click](https://evil.test)',fix:'@attacker'}]}}});assert.doesNotMatch(escaped,/<script>|@everyone|\[click\]\(https:\/\/evil/);
+ const run=runScan({data:withImpact.data});assert.equal(run.status,1);assert.match(JSON.parse(run.calls.find(c=>c.method==='POST'&&c.url.includes('/issues/7/comments')).body).body,/What changed in this PR/);
+ const override=runScan({ref:'main',data:report.data});assert.equal(JSON.parse(override.calls.find(c=>c.url.endsWith('/api/reports')).body).pullRequest,undefined);
 });

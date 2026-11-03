@@ -61,6 +61,9 @@ if (!["red", "yellow", "never"].includes(failOn)) fail(`Input \`fail-on\` must b
 
 const body = { repoUrl: `https://github.com/${repository}` };
 if (ref) body.ref = ref;
+// Compare the actual PR merge base, never an arbitrary previous saved report.
+const prContext = pullRequestContext();
+if (prContext && prContext.repository === repository && prContext.sha === ref.toLowerCase()) body.pullRequest = prContext.number;
 if (githubToken) body.privateToken = githubToken;
 if (checks.length) body.checks = checks;
 

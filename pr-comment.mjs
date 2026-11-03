@@ -26,6 +26,13 @@ function sourceLocation(repository, sha, finding) {
   return `[${label}](https://github.com/${repository}/blob/${sha}/${file.split('/').map(part => encodeURIComponent(part).replace(/[!'()*]/g, c => '%' + c.charCodeAt(0).toString(16))).join('/')}#L${line})`;
 }
 const footer = audit => `\n\nStatic source analysis only. Builds, runtime behavior and payment fulfillment were not executed.${audit ? '\n\n<sub>Need a human review? [One-repo audit · €149](https://deploydoctor.nyttolabs.com/?utm_source=github-action&utm_medium=pr-comment#human-audit-heading).</sub>' : ''}`;
+function changeReview(context, impact) {
+  if (impact == null) return '';
+  if (impact.version !== 1 || impact.number !== context.number || impact.headCommitSha !== context.sha || !SHA.test(impact.baseCommitSha ?? '')
+    || ['introduced','persisting','noLongerDetected','uncertain','notCompared'].some(key => !Array.isArray(impact[key]))) throw new Error('PR comparison does not match this PR.');
+  const list = impact.introduced.slice(0,3).map(f => `- **${f.status === 'red' ? 'Source finding' : 'Needs review'}** · ${sourceLocation(context.repository, context.sha, f)}\n  ${text(f.problem)}\n  Next step: ${text(f.fix)}`).join('\n\n');
+  return `\n\n### What changed in this PR?\n\nCompared with merge base [${impact.baseCommitSha.slice(0,12)}](https://github.com/${context.repository}/commit/${impact.baseCommitSha}).\n\n**${impact.introduced.length} newly detected** · ${impact.persisting.length} already present · ${impact.noLongerDetected.length} no longer detected.${impact.partial || impact.notCompared.length || impact.uncertain.length ? '\n\n**Incomplete comparison:** unmatched findings require review, not a new/fixed verdict.' : ''}\n\n${list || 'No newly detected findings in comparable checks. This does not establish that the PR is safe to merge.'}${impact.introduced.length > 3 ? `\n\n${impact.introduced.length - 3} more newly detected findings in the report.` : ''}\n\nNo longer detected is not a verified fix. This compares source snapshots, not the merged build.`;
+}
 export function renderComment(context, outcome, audit = true) {
   const heading = `${MARKER}\n## DeployDoctor · `;
   const commit = `Analyzed commit: [${context.sha.slice(0, 12)}](https://github.com/${context.repository}/commit/${context.sha}).`;
@@ -33,6 +40,8 @@ export function renderComment(context, outcome, audit = true) {
   const data = outcome.data, url = reportUrl(data.url, outcome.apiUrl);
   if (!url || !SHA.test(data.commitSha ?? '') || data.commitSha.toLowerCase() !== context.sha || data.repoUrl !== `https://github.com/${context.repository}`) throw new Error('Report does not match this PR commit/repository.');
   if (!['red','yellow','green'].includes(data.overall) || !Array.isArray(data.checks) || !data.summary || ['red','yellow','green'].some(k => !Number.isSafeInteger(data.summary[k]) || data.summary[k] < 0)) throw new Error('Invalid scan result.');
+  const changes = changeReview(context, data.pullRequest);
+  if (changes) return `${heading}PR change review\n\n${commit}${changes}\n\nFull head scan: ${data.summary.red} red checks · ${data.summary.yellow} to review · ${data.summary.green} passed.${data.partial ? ' Partial source coverage.' : ''}\n\n[Open full report](${url})${data.isPrivate ? ' · Private report: existing owner authentication is required.' : ''}${footer(audit)}`;
   const findings = data.checks.filter(c => c.status !== 'green').flatMap(c => (c.findings?.length ? c.findings : [{ problem: c.explanation, fix: c.fix }]).map(f => ({ ...f, status: ['red','yellow'].includes(f.status) ? f.status : c.status })));
   findings.sort((a,b) => (a.status === 'red' ? 0 : 1) - (b.status === 'red' ? 0 : 1));
   const list = findings.slice(0,3).map(f => `- **${f.status === 'red' ? 'Source finding' : 'Needs review'}** · ${sourceLocation(context.repository,context.sha,f)}\n  ${text(f.problem)}\n  Next step: ${text(f.fix)}`).join('\n\n');
