@@ -70,3 +70,9 @@ The lab runs in your browser with sample events; it sends no live payments and d
 Full documentation: https://deploydoctor.nyttolabs.com/ci
 
 Source of the scanner: https://github.com/jonjys/deploydoctor. Questions: support@nyttolabs.com
+
+## PR Change Review
+
+On a matching same-repository PR-head scan, the Action asks DeployDoctor to compare the head with its immutable merge base. The single PR comment separates newly detected findings, existing findings, and findings no longer detected, with fixed-commit source links. Partial or incomparable observations require review. A missing comparison from an older/self-hosted server keeps the normal head-scan comment.
+
+This uses one existing scan allowance and the same paid/private permissions. `fail-on` still applies to the full head scan, including existing problems; it does not silently become a new-findings-only gate. The comparison does not build the merge result or prove a fix. Forks, Dependabot and ref overrides keep the existing behavior. Update your pinned Action SHA to a release containing this feature; an older `v1` tag does not automatically gain it.
