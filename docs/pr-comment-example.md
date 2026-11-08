@@ -1,29 +1,45 @@
 # Illustrative PR comment
 
-The following is a fixture example, not a screenshot or evidence of a real deployment failure. Production comments use the saved report's immutable commit, source evidence and report URL.
+The following is the shape produced by `renderComment`, not a screenshot or evidence of a live deployment failure. A real comment uses the saved report's immutable commit, source evidence, and report URL. Report links look like `https://deploydoctor.nyttolabs.com/r/<report-id>`.
 
+```markdown
+<!-- deploydoctor:pr-report:v1 -->
 ## DeployDoctor · Source findings
 
-Analyzed commit: `aaaaaaaaaaaa`.
+Analyzed commit: [aaaaaaaaaaaa](https://github.com/acme/site/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa).
 
-Red checks: 1 · To review: 1 · Passed: 4.
+Deploy risks: 1 high-risk (red) · 1 to review · 4 passed.
 
-- **Source finding** · `src/home.ts:3`
+- **Source finding** · [src/home.ts:3](https://github.com/acme/site/blob/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/src/home.ts#L3)
   Import path casing differs from the target file.
   Next step: change the import to use the committed filename casing.
 
-- **Needs review** · `app/api/webhook/route.ts:9`
+- **Needs review** · [app/api/webhook/route.ts:9](https://github.com/acme/site/blob/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/app/api/webhook/route.ts#L9)
   A check followed by a separate write can race between two deliveries.
   Next step: inspect the durable claim, unique constraints and transaction boundaries.
 
-Open full report → the actual saved report URL.
+[Open the full DeployDoctor report](https://deploydoctor.nyttolabs.com/r/example-report)
 
 Static source analysis only. Builds, runtime behavior and payment fulfillment were not executed.
+```
 
-Optional footer: one-repo human audit, €149. This links the existing offer, not a new product or subscription.
+## Scan failed
 
-## Verified implementation boundaries
+The same marker is updated when DeployDoctor does not return a report. The job stays green unless the workflow sets `fail-on-high-risk: true`.
 
-14 Node tests currently pass, including the original scan/quota/annotation cases. Tests use a mocked GitHub API: create, update, pagination, human-marker spoofing, stale/closed PRs, partial coverage, quota/error outcomes, missing permission, opt-out, forks, and separation of comment-token from scanner requests. No live GitHub comment is claimed solely on this basis.
+```markdown
+<!-- deploydoctor:pr-report:v1 -->
+## DeployDoctor · Scan failed
 
-The existing release workflow tests both modules before updating v1 with a lease on its previous SHA. A merged branch is not proof that v1 moved: verify the tag and workflow run after merge. No new account, price, secret or scan quota is introduced.
+Requested commit: [aaaaaaaaaaaa](https://github.com/acme/site/commit/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa).
+
+The scan did not finish (HTTP 503). No deploy-risk result is available for this commit. Check the workflow job and rerun to update this comment.
+
+This replaces the previous comment; a previous pass is not a result for this commit.
+
+Static source analysis only. Builds, runtime behavior and payment fulfillment were not executed.
+```
+
+## What the tests cover
+
+Node tests exercise the comment renderer and `scan.mjs` with a mocked GitHub API and a mocked DeployDoctor response. They cover create, update, unchanged body, duplicate collapse, pagination, human-marker spoofing, stale or closed pull requests, partial coverage, quota and scan-failure outcomes, `fail-on-high-risk`, missing permission, opt-out, forks, and separation of `comment-token` from scanner requests. Those tests do not post a live GitHub comment.
