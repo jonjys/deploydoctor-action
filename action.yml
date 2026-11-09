@@ -22,15 +22,19 @@ inputs:
     required: false
     default: ""
   fail-on:
-    description: Which result fails the job. `red` (default) fails on definite problems, `yellow` also fails on items that need review, `never` only reports.
+    description: Which findings fail the job. `never` (default) only reports. `red` fails on high-risk findings. `yellow` also fails on items that need review. A scan that cannot finish still passes unless `fail-on-high-risk` is true.
     required: false
-    default: red
+    default: never
+  fail-on-high-risk:
+    description: "When true, fail the job if the report has high-risk (red) findings or if the scan cannot finish. Default false keeps the job green and reports in the pull request comment. Using up the free daily scan still passes."
+    required: false
+    default: "false"
   checks:
     description: Comma-separated categories to scan. Any of next, vercel, env, supabase, prisma. Leave empty to let the detected stack decide.
     required: false
     default: ""
   comment:
-    description: Update one PR conversation comment. Requires pull-requests write permission. Does not comment on forks, Dependabot or non-PR events. Failure to comment never changes the scan result.
+    description: Update one sticky PR conversation comment. Requires pull-requests write on the workflow token. Does not comment on forks, Dependabot or non-PR events. A failed scan updates that same comment. Failure to comment never changes the scan result.
     required: false
     default: "true"
   comment-token:
@@ -38,9 +42,9 @@ inputs:
     required: false
     default: ${{ github.token }}
   audit-link:
-    description: Include a discreet link to the existing optional human audit in the PR comment.
+    description: Accepted for older workflows. The pull request comment does not include a paid audit offer.
     required: false
-    default: "true"
+    default: "false"
   api-url:
     description: DeployDoctor base URL. Only change this for a self-hosted instance.
     required: false
@@ -75,6 +79,7 @@ runs:
         DD_REF: ${{ inputs.ref }}
         DD_GITHUB_TOKEN: ${{ inputs.github-token }}
         DD_FAIL_ON: ${{ inputs.fail-on }}
+        DD_FAIL_ON_HIGH_RISK: ${{ inputs.fail-on-high-risk }}
         DD_CHECKS: ${{ inputs.checks }}
         DD_COMMENT: ${{ inputs.comment }}
         DD_COMMENT_TOKEN: ${{ inputs.comment-token }}

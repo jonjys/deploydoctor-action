@@ -1,6 +1,6 @@
 // DeployDoctor GitHub Action. Plain Node, no dependencies: it POSTs to /api/reports with the API token,
 // or without one with a GitHub OIDC token (free on public repositories), writes the result to the job
-// summary, exposes outputs and fails the job according to `fail-on`.
+// summary, updates one pull request comment, and fails the job only when fail-on or fail-on-high-risk says so.
 import { appendFileSync, readFileSync } from "node:fs";
 import { pullRequestContext, upsertComment, text as markdownText } from "./pr-comment.mjs";
 
@@ -9,7 +9,9 @@ const token = env("DD_TOKEN");
 const repository = env("DD_REPOSITORY");
 const ref = env("DD_REF");
 const githubToken = env("DD_GITHUB_TOKEN");
-const failOn = env("DD_FAIL_ON", "red").toLowerCase();
+const failOn = (env("DD_FAIL_ON") || "never").toLowerCase();
+const failOnHighRisk = (env("DD_FAIL_ON_HIGH_RISK") || "false").toLowerCase();
+// `audit-link` (DD_AUDIT_LINK) is accepted for older workflows and intentionally unused.
 const checks = env("DD_CHECKS").split(",").map((item) => item.trim()).filter(Boolean);
 const apiUrl = env("DD_API_URL", "https://deploydoctor.nyttolabs.com").replace(/\/+$/, "");
 
@@ -58,6 +60,8 @@ async function githubOidcToken() {
 }
 if (!/^[\w.-]+\/[\w.-]+$/.test(repository)) fail(`Input \`repository\` must be owner/name, got "${repository}".`);
 if (!["red", "yellow", "never"].includes(failOn)) fail(`Input \`fail-on\` must be red, yellow or never, got "${failOn}".`);
+if (!["true", "false"].includes(failOnHighRisk)) fail(`Input \`fail-on-high-risk\` must be true or false, got "${failOnHighRisk}".`);
+const gateHighRisk = failOnHighRisk === "true";
 
 const body = { repoUrl: `https://github.com/${repository}` };
 if (ref) body.ref = ref;
@@ -74,7 +78,7 @@ async function comment(outcome) {
   const commentToken = env("DD_COMMENT_TOKEN");
   if (!commentToken) { output("comment-status", "skipped"); return; }
   try {
-    const result = await upsertComment({context, outcome, token:commentToken, audit:env("DD_AUDIT_LINK", "true") === "true"});
+    const result = await upsertComment({ context, outcome, token: commentToken });
     output("comment-status", result.status);
     if (result.url) output("comment-url", result.url);
     if (result.status === "stale") summary("PR comment kept: the pull request head changed or the PR was closed. This scan is not the current PR result.");
@@ -89,6 +93,12 @@ const auth = free ? { "x-github-oidc-token": await githubOidcToken() } : { autho
 
 let response;
 let data;
+async function reportScanFailure(message, status) {
+  summary("## DeployDoctor: scan failed\n\nNo deploy-risk result was saved for this commit. On a pull request, the sticky comment says the scan failed.");
+  await comment({ kind: "unavailable", ...(status ? { status } : {}) });
+  if (gateHighRisk) fail(message);
+  warn(message);
+}
 try {
   response = await fetch(`${apiUrl}/api/reports`, {
     method: "POST",
@@ -96,23 +106,24 @@ try {
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(90_000),
   });
-  data = await response.json();
+  const raw = await response.text();
+  data = raw ? JSON.parse(raw) : {};
 } catch (error) {
-  await comment({kind:"unavailable"});
-  fail(`DeployDoctor did not answer: ${error instanceof Error ? error.message : String(error)}`);
+  if (response) await reportScanFailure(`DeployDoctor returned ${response.status}: the response was not JSON.`, response.status);
+  else await reportScanFailure(`DeployDoctor did not answer: ${error instanceof Error ? error.message : String(error)}`);
 }
 
 if (free && response.status === 429 && data?.paywall === true) {
   // The free daily quota for this repository is used up: report it, never block the pull request.
-  // Any other 429, such as a GitHub API rate limit, is a failed scan and is reported as one below.
+  // Any other 429, such as a GitHub API rate limit, is reported as a failed scan below and passes unless fail-on-high-risk is true.
   summary(`## DeployDoctor: not scanned\n\nToday's free scan for ${repository} is used. No new result was produced for this commit. [Pass details](${apiUrl}/pricing).`);
   await comment({kind:"quota"});
   warn(`DeployDoctor: today's free scan for ${repository} is used (${data?.error ?? "daily limit"}). Unlimited scans: ${apiUrl}/pricing`);
 }
 if (!response.ok) {
-  await comment({kind:"unavailable"});
   const hint = response.status === 402 ? ` A pass is needed: ${apiUrl}/pricing` : response.status === 401 ? " Create a new token under My scans." : "";
-  fail(`DeployDoctor returned ${response.status}: ${data?.error ?? "unknown error"}.${hint}`);
+  const detail = typeof data?.error === "string" ? data.error : "unknown error";
+  await reportScanFailure(`DeployDoctor returned ${response.status}: ${detail}.${hint}`, response.status);
 }
 
 const icon = { red: "🔴", yellow: "🟡", green: "🟢" };
@@ -149,5 +160,7 @@ for (const check of data.checks) {
 await comment({kind:"report",data,apiUrl});
 
 console.log(`DeployDoctor: ${label[data.overall]} (${data.summary.red} failed, ${data.summary.yellow} to review). ${data.url}`);
-const failed = (failOn === "red" && data.summary.red > 0) || (failOn === "yellow" && (data.summary.red > 0 || data.summary.yellow > 0));
+const highRisk = data.summary.red > 0;
+const needsReview = data.summary.yellow > 0;
+const failed = (gateHighRisk && highRisk) || (failOn === "red" && highRisk) || (failOn === "yellow" && (highRisk || needsReview));
 if (failed) fail(`DeployDoctor found ${data.summary.red} failed and ${data.summary.yellow} to review. ${data.url}`);

@@ -15,11 +15,13 @@ const comment={id:42,body:MARKER+'\nprevious',user:{type:'Bot',login:'github-act
 function mockGithub(existing=[],head=pr){
  const calls=[];const fetcher=async(url,options)=>{calls.push({url,...options});assert.equal(options.redirect,'error');assert.equal(options.headers.authorization,'Bearer comment-only');if(url.endsWith('/pulls/7'))return Response.json(head);if(options.method==='GET')return Response.json(existing);return Response.json({html_url:'https://github.com/acme/site/pull/7#issuecomment-42'});};return {fetcher,calls};
 }
-test('comment includes real commit, ranked findings, source links, limitations, optional audit and partial status',()=>{
- const body=renderComment(context,report);assert.ok(body.startsWith(MARKER));assert.ok(body.indexOf('Wrong case')<body.indexOf('Review redirect'));assert.match(body,/blob\/a{40}\/src\/home.ts#L3/);assert.match(body,/Analyzed commit/);assert.match(body,/One-repo audit · €149/);assert.match(body,/Static source analysis only/);assert.doesNotMatch(renderComment(context,report,false),/€149/);
+test('comment includes real commit, ranked findings, source links, report URL and partial status',()=>{
+ const body=renderComment(context,report);assert.ok(body.startsWith(MARKER));assert.ok(body.indexOf('Wrong case')<body.indexOf('Review redirect'));assert.match(body,/blob\/a{40}\/src\/home.ts#L3/);assert.match(body,/Analyzed commit/);assert.match(body,/Deploy risks: 1 high-risk \(red\)/);assert.match(body,/https:\/\/deploydoctor\.example\/r\/fixture/);assert.match(body,/Open the full DeployDoctor report/);assert.match(body,/Static source analysis only/);assert.doesNotMatch(body,/€|One-repo audit|human review/);
  const partial=renderComment(context,{...report,data:{...report.data,partial:true}});assert.match(partial,/Partial scan/);assert.match(partial,/some source was not checked/);
  const green=renderComment(context,{...report,data:{...report.data,overall:'green',checks:[],summary:{red:0,yellow:0,green:5}}});assert.match(green,/Checks passed/);assert.match(green,/not a guarantee/);
- const quota=renderComment(context,{kind:'quota'});assert.match(quota,/Not scanned/);assert.match(quota,/No new scan/);assert.doesNotMatch(quota,/Open full report/);
+ const quota=renderComment(context,{kind:'quota'});assert.match(quota,/Not scanned/);assert.match(quota,/No new scan/);assert.doesNotMatch(quota,/Open the full DeployDoctor report/);
+ const failed=renderComment(context,{kind:'unavailable',status:503});assert.match(failed,/Scan failed/);assert.match(failed,/HTTP 503/);assert.match(failed,/No deploy-risk result/);assert.doesNotMatch(failed,/Open the full DeployDoctor report|€/);
+ const injected=renderComment(context,{kind:'unavailable',status:'503\n@everyone <img>'});assert.match(injected,/Scan failed/);assert.doesNotMatch(injected,/HTTP 503|@everyone|<img/);
 });
 test('source text cannot create mentions, HTML, Markdown links or invalid report destinations',()=>{
  const hostile=structuredClone(report);hostile.data.checks[0].findings[0].problem='@everyone <img src=x> [click](https://evil.test)\n# hello';
@@ -30,6 +32,21 @@ test('source text cannot create mentions, HTML, Markdown links or invalid report
 test('creates once and updates an existing bot comment; ignores marker spoofing by people',async()=>{
  const created=mockGithub([{...comment,id:21,user:{type:'User',login:'attacker'}}]);assert.equal((await upsertComment({context,outcome:report,token:'comment-only',...created})).status,'created');assert.equal(created.calls.at(-1).method,'POST');
  const updated=mockGithub([comment]);assert.deepEqual(await upsertComment({context,outcome:report,token:'comment-only',...updated}),{status:'updated',url:'https://github.com/acme/site/pull/7#issuecomment-42'});assert.equal(updated.calls.at(-1).method,'PATCH');assert.ok(updated.calls.at(-1).url.endsWith('/issues/comments/42'));
+});
+test('duplicate bot reports collapse to the oldest comment and an unchanged body is not rewritten',async()=>{
+ const body=renderComment(context,report);
+ const older={...comment,id:10,body:MARKER+'\nold',html_url:'https://github.com/acme/site/pull/7#issuecomment-10'};
+ const newer={...comment,id:11,body:MARKER+'\nnewer'};
+ const calls=[];
+ const fetcher=async(url,options)=>{calls.push({url,method:options.method,body:options.body});assert.equal(options.redirect,'error');assert.equal(options.headers.authorization,'Bearer comment-only');if(url.endsWith('/pulls/7'))return Response.json(pr);if(options.method==='GET')return Response.json([newer,older]);if(options.method==='DELETE')return new Response(null,{status:204});return Response.json({html_url:'https://github.com/acme/site/pull/7#issuecomment-10'});};
+ const updated=await upsertComment({context,outcome:report,token:'comment-only',fetcher});
+ assert.equal(updated.status,'updated');assert.equal(updated.url,'https://github.com/acme/site/pull/7#issuecomment-10');
+ assert.equal(calls.filter(c=>c.method==='PATCH').length,1);assert.ok(calls.some(c=>c.method==='PATCH'&&c.url.endsWith('/issues/comments/10')));
+ assert.ok(calls.some(c=>c.method==='DELETE'&&c.url.endsWith('/issues/comments/11')));assert.equal(JSON.parse(calls.find(c=>c.method==='PATCH').body).body,body);
+ const same={...comment,body,html_url:'https://github.com/acme/site/pull/7#issuecomment-42'};
+ const quiet=mockGithub([same]);assert.deepEqual(await upsertComment({context,outcome:report,token:'comment-only',...quiet}),{status:'updated',url:'https://github.com/acme/site/pull/7#issuecomment-42'});assert.ok(quiet.calls.every(c=>c.method==='GET'));
+ const deniedDelete=async(url,options)=>{if(url.endsWith('/pulls/7'))return Response.json(pr);if(options.method==='GET')return Response.json([older,newer]);if(options.method==='DELETE')return Response.json({},{status:403});return Response.json({html_url:'https://github.com/acme/site/pull/7#issuecomment-10'});};
+ assert.equal((await upsertComment({context,outcome:report,token:'comment-only',fetcher:deniedDelete})).status,'updated');
 });
 test('pagination finds the original comment and changed heads or closed PRs never write',async()=>{
  let writes=0;const paged=async(url,opts)=>{if(url.endsWith('/pulls/7'))return Response.json(pr);if(opts.method!=='GET'){writes++;return Response.json({});}return Response.json(new URL(url).searchParams.get('page')==='1'?Array.from({length:100},()=>({user:{type:'User'},body:''})):[comment]);};
@@ -46,11 +63,11 @@ test('only same-repository pull_request events can request comments, including w
  writeFileSync(path,'{');assert.equal(pullRequestContext(env),null);
  }finally{rmSync(dir,{recursive:true,force:true});}
 });
-function runScan({status=201,data=report.data,comments=[],permissionDenied=false,disabled=false,evt=event,ref=sha,paid=false}={}){
+function runScan({status=201,data=report.data,comments=[],permissionDenied=false,disabled=false,evt=event,ref=sha,paid=false,failOn='red',failOnHighRisk=false}={}){
  const dir=mkdtempSync(join(tmpdir(),'dd-comment-scan-'));try{
  const eventPath=join(dir,'event.json'),callsPath=join(dir,'calls.jsonl'),output=join(dir,'output'),summary=join(dir,'summary');writeFileSync(eventPath,JSON.stringify(evt));writeFileSync(callsPath,'');
  const mock=`import {appendFileSync} from 'node:fs';globalThis.fetch=async(url,options={})=>{appendFileSync(${JSON.stringify(callsPath)},JSON.stringify({url,method:options.method,headers:options.headers,body:options.body})+'\\n');if(String(url).startsWith('https://oidc.example/'))return Response.json({value:'fixture-oidc'});if(String(url).endsWith('/api/reports'))return Response.json(${JSON.stringify(data)},{status:${status}});if(${permissionDenied})return Response.json({},{status:403});if(String(url).endsWith('/pulls/7'))return Response.json(${JSON.stringify(pr)});if(options.method==='GET')return Response.json(${JSON.stringify(comments)});return Response.json({html_url:'https://github.com/acme/site/pull/7#issuecomment-42'});};`;
- const env={...process.env,DD_TOKEN:paid?'fixture-paid':'',DD_REPOSITORY:repository,DD_REF:ref,DD_GITHUB_TOKEN:'',DD_FAIL_ON:'red',DD_CHECKS:'',DD_API_URL:'https://deploydoctor.example',DD_COMMENT:disabled?'false':'true',DD_COMMENT_TOKEN:'comment-only',DD_AUDIT_LINK:'true',GITHUB_EVENT_NAME:'pull_request',GITHUB_EVENT_PATH:eventPath,GITHUB_REPOSITORY:repository,GITHUB_ACTOR:'builder',GITHUB_OUTPUT:output,GITHUB_STEP_SUMMARY:summary,ACTIONS_ID_TOKEN_REQUEST_URL:'https://oidc.example/?request=fixture',ACTIONS_ID_TOKEN_REQUEST_TOKEN:'oidc-request'};delete env.NODE_TEST_CONTEXT;
+ const env={...process.env,DD_TOKEN:paid?'fixture-paid':'',DD_REPOSITORY:repository,DD_REF:ref,DD_GITHUB_TOKEN:'',DD_FAIL_ON:failOn,DD_FAIL_ON_HIGH_RISK:failOnHighRisk?'true':'false',DD_CHECKS:'',DD_API_URL:'https://deploydoctor.example',DD_COMMENT:disabled?'false':'true',DD_COMMENT_TOKEN:'comment-only',DD_AUDIT_LINK:'true',GITHUB_EVENT_NAME:'pull_request',GITHUB_EVENT_PATH:eventPath,GITHUB_REPOSITORY:repository,GITHUB_ACTOR:'builder',GITHUB_OUTPUT:output,GITHUB_STEP_SUMMARY:summary,ACTIONS_ID_TOKEN_REQUEST_URL:'https://oidc.example/?request=fixture',ACTIONS_ID_TOKEN_REQUEST_TOKEN:'oidc-request'};delete env.NODE_TEST_CONTEXT;
  const result=spawnSync(process.execPath,['--import',`data:text/javascript,${encodeURIComponent(mock)}`,fileURLToPath(new URL('./scan.mjs',import.meta.url))],{env,encoding:'utf8',timeout:10_000});return {...result,calls:readFileSync(callsPath,'utf8').trim().split('\n').filter(Boolean).map(JSON.parse),output:readFileSync(output,'utf8'),summary:readFileSync(summary,'utf8')};
  }finally{rmSync(dir,{recursive:true,force:true});}
 }
@@ -58,7 +75,7 @@ test('red scans publish the comment before failing; comment token never reaches 
  const result=runScan();assert.equal(result.status,1,result.stderr);assert.match(result.output,/comment-status=created/);const scan=result.calls.find(c=>c.url.endsWith('/api/reports'));assert.equal(JSON.parse(scan.body).pullRequest,7);assert.equal(JSON.parse(scan.body).ref,sha);assert.doesNotMatch(JSON.stringify(scan),/comment-only/);assert.ok(result.calls.some(c=>c.method==='POST'&&c.url.includes('/issues/7/comments')));
 });
 test('quota exhaustion updates the comment without failing or presenting a stale green result',()=>{
- const result=runScan({status:429,data:{paywall:true,error:'One free scan used'},comments:[comment]});assert.equal(result.status,0,result.stderr);assert.match(result.summary,/not scanned/);assert.match(result.output,/comment-status=updated/);const written=JSON.parse(result.calls.find(c=>c.method==='PATCH').body).body;assert.match(written,/Not scanned/);assert.doesNotMatch(written,/Checks passed|Open full report/);
+ const result=runScan({status:429,data:{paywall:true,error:'One free scan used'},comments:[comment],failOnHighRisk:true});assert.equal(result.status,0,result.stderr);assert.match(result.summary,/not scanned/);assert.match(result.output,/comment-status=updated/);const written=JSON.parse(result.calls.find(c=>c.method==='PATCH').body).body;assert.match(written,/Not scanned/);assert.doesNotMatch(written,/Checks passed|Open the full DeployDoctor report|€/);
 });
 test('missing permissions cannot change scan success; opt-out, ref overrides and forks never comment',()=>{
  const green={...report.data,overall:'green',checks:[],summary:{red:0,yellow:0,green:5}};const denied=runScan({data:green,permissionDenied:true});assert.equal(denied.status,0,denied.stderr);assert.match(denied.output,/comment-status=failed/);assert.match(denied.stdout,/pull-requests: write/);
@@ -72,10 +89,19 @@ test('PR change review distinguishes new findings from existing ones and preserv
  const impact={version:1,number:7,headCommitSha:sha,baseCommitSha:'b'.repeat(40),partial:false,introduced:[{file:'app/page.tsx',line:8,problem:'New casing break',fix:'Use Button.tsx',status:'red'}],persisting:[{file:'old.ts',line:1,problem:'Old env risk'}],noLongerDetected:[{}],uncertain:[],notCompared:[]};
  const withImpact={...report,data:{...report.data,pullRequest:impact}};
  const body=renderComment(context,withImpact,false);assert.match(body,/1 newly detected/);assert.match(body,/1 already present/);assert.match(body,/1 no longer detected/);assert.match(body,/New casing break/);assert.doesNotMatch(body,/Old env risk/);assert.match(body,/not a verified fix/);assert.match(body,/b{12}/);assert.match(body,/blob\/a{40}\/app\/page.tsx#L8/);
- const noNew=renderComment(context,{...withImpact,data:{...withImpact.data,pullRequest:{...impact,introduced:[]}}},false);assert.match(noNew,/No newly detected findings/);assert.match(noNew,/does not establish/);assert.match(noNew,/1 red checks/);
+ const noNew=renderComment(context,{...withImpact,data:{...withImpact.data,pullRequest:{...impact,introduced:[]}}},false);assert.match(noNew,/No newly detected findings/);assert.match(noNew,/does not establish/);assert.match(noNew,/1 high-risk \(red\)/);
  for(const bad of [{...impact,number:8},{...impact,headCommitSha:'c'.repeat(40)},{...impact,baseCommitSha:'main'},{...impact,introduced:null}])assert.throws(()=>renderComment(context,{...report,data:{...report.data,pullRequest:bad}}));
  const partial=renderComment(context,{...report,data:{...report.data,partial:true,pullRequest:{...impact,partial:true,introduced:[],uncertain:[{}]}}});assert.match(partial,/Incomplete comparison/);assert.match(partial,/not a new\/fixed verdict/);
  const escaped=renderComment(context,{...report,data:{...report.data,pullRequest:{...impact,introduced:[{file:'@attacker.ts',line:1,status:'red',problem:'<script> @everyone [click](https://evil.test)',fix:'@attacker'}]}}});assert.doesNotMatch(escaped,/<script>|@everyone|\[click\]\(https:\/\/evil/);
  const run=runScan({data:withImpact.data});assert.equal(run.status,1);assert.match(JSON.parse(run.calls.find(c=>c.method==='POST'&&c.url.includes('/issues/7/comments')).body).body,/What changed in this PR/);
  const override=runScan({ref:'main',data:report.data});assert.equal(JSON.parse(override.calls.find(c=>c.url.endsWith('/api/reports')).body).pullRequest,undefined);
+});
+
+test('a failed scan updates the sticky comment and passes unless fail-on-high-risk is set',()=>{
+ const failed=runScan({status:503,data:{error:'scanner unavailable\n@everyone'}});assert.equal(failed.status,0,failed.stderr);assert.match(failed.stdout,/::warning::DeployDoctor returned 503/);assert.doesNotMatch(failed.stdout,/::error::/);assert.match(failed.summary,/scan failed/);assert.match(failed.output,/comment-status=created/);
+ const written=JSON.parse(failed.calls.find(c=>c.method==='POST'&&c.url.includes('/issues/7/comments')).body).body;assert.match(written,/Scan failed/);assert.match(written,/HTTP 503/);assert.doesNotMatch(written,/Open the full DeployDoctor report|@everyone|scanner unavailable|€/);
+ const gated=runScan({status:503,data:{error:'scanner unavailable'},failOnHighRisk:true,comments:[comment]});assert.equal(gated.status,1,gated.stderr);assert.match(gated.stdout,/::error::DeployDoctor returned 503/);assert.match(gated.output,/comment-status=updated/);
+ const yellowOnly={...report.data,overall:'yellow',summary:{red:0,yellow:1,green:2},checks:[{title:'Review',status:'yellow',findings:[{file:'app/checkout.ts',line:9,problem:'Review redirect',fix:'Verify production URL'}]}]};
+ assert.equal(runScan({data:yellowOnly,failOn:'never',failOnHighRisk:true}).status,0);
+ assert.equal(runScan({data:report.data,failOn:'never',failOnHighRisk:true}).status,1);
 });
